@@ -1,0 +1,4 @@
+game/*
+!game/csgo/
+game/csgo/*
+!game/csgo/linux-fonts/

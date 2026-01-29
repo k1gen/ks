@@ -1,3 +1,5 @@
 /build/
 /.lock*
 /.waf3*
+/ccache.conf
+/.cache
