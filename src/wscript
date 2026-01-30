@@ -92,7 +92,6 @@ PROJECTS = [
     "thirdparty/dxvk-native-1.9.2b/src/util",
     "thirdparty/dxvk-native-1.9.2b/src/vulkan",
     "thirdparty/dxvk-native-1.9.2b/src/wsi",
-    "thirdparty/freetype-2.13.2",
     "thirdparty/JoltPhysics-4.0.2/Jolt",
     "thirdparty/jpeg-8",
     "thirdparty/libpng-1.5.2",
@@ -293,7 +292,10 @@ def configure(conf):
             conf.define("_DLL_EXT", ".so", quote=False)
         conf.check_cfg(package="sdl2", args="--cflags --libs", uselib_store="SDL2")
         includes += conf.env.INCLUDES_SDL2
-        includes += [os.path.abspath("thirdparty/freetype-2.13.2/include")]
+        conf.check_cfg(package="freetype2", args="--cflags --libs", uselib_store="FREETYPE")
+        includes += conf.env.INCLUDES_FREETYPE
+        conf.check_cfg(package="fontconfig", args="--cflags --libs", uselib_store="FONTCONFIG")
+        includes += conf.env.INCLUDES_FONTCONFIG
 
     conf.define("CSTRIKE15", True)
     conf.define("CSTRIKE_REL_BUILD", True)

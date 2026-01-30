@@ -1293,11 +1293,16 @@ void CScheme::ReloadFontGlyphs( int inScreenTall )
 
 			// only grow this font if it doesn't have a resolution filter specified
 			// ALFRED - allow proportional to still take effect for the far end of font selection
+#ifdef LINUX
+			// On Linux, always apply proportional scaling for readable fonts on high-DPI displays
+			if ( ( !fontYResMin && !fontYResMax ) || fontYResMax > 4000 )
+#else
 			if ( ( ( !fontYResMin && !fontYResMax ) || fontYResMax > 4000 ) && m_FontAliases[i].m_bProportional )
+#endif
 			{
 				tall = g_Scheme.GetProportionalScaledValueEx( this, tall );
 				blur = g_Scheme.GetProportionalScaledValueEx( this, blur );
-				scanlines = g_Scheme.GetProportionalScaledValueEx( this, scanlines ); 
+				scanlines = g_Scheme.GetProportionalScaledValueEx( this, scanlines );
 				scalex = g_Scheme.GetProportionalScaledValueEx( this, scalex * 10000.0f ) * 0.0001f;
 				scaley = g_Scheme.GetProportionalScaledValueEx( this, scaley * 10000.0f ) * 0.0001f;
 			}

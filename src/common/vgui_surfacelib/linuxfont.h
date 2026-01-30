@@ -98,6 +98,7 @@ protected:
         
 private:
 	void InitMetrics();
+	static void CreateFontList();
 
 
 

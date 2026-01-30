@@ -1,4 +1,4 @@
-//========= Copyright © 1996-2005, Valve Corporation, All rights reserved. ============//
+//========= Copyright ï¿½ 1996-2005, Valve Corporation, All rights reserved. ============//
 //
 // Purpose: 
 //
@@ -82,7 +82,7 @@ public:
 
 
 private:
-	enum { BASE_HEIGHT = 480, BASE_WIDTH = 640 };
+	enum { BASE_HEIGHT = 1080, BASE_WIDTH = 1920 };
 		
 	bool m_bIsInitialized;
 	

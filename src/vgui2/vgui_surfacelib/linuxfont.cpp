@@ -11,11 +11,13 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <math.h>
 #include <malloc.h>
 #include <tier0/dbg.h>
 #include <vgui/ISurface.h>
 #include <utlbuffer.h>
+#include <fontconfig/fontconfig.h>
 #include "materialsystem/imaterialsystem.h"
 
 #include "vgui_surfacelib/fontmanager.h"
@@ -108,6 +110,134 @@ CLinuxFont::~CLinuxFont()
 }
 
 
+//-----------------------------------------------------------------------------
+// Purpose: build a map of friendly (char *) name to font file path
+//-----------------------------------------------------------------------------
+void CLinuxFont::CreateFontList()
+{
+	if ( m_FriendlyNameCache.Count() > 0 )
+		return;
+
+	if ( !FcInit() )
+		return;
+
+	FcConfig *config = FcConfigGetCurrent();
+	FcPattern *pat = FcPatternCreate();
+	FcObjectSet *os = FcObjectSetCreate();
+	FcObjectSetAdd(os, FC_FILE);
+	FcObjectSetAdd(os, FC_FULLNAME);
+	FcObjectSetAdd(os, FC_FAMILY);
+	FcObjectSetAdd(os, FC_SCALABLE);
+	FcFontSet *fontset = FcFontList(config, pat, os);
+
+	if ( !fontset )
+		return;
+
+	for ( int i = 0; i < fontset->nfont; i++ )
+	{
+		FcBool scalable;
+		if ( FcPatternGetBool(fontset->fonts[i], FC_SCALABLE, 0, &scalable) == FcResultMatch && !scalable )
+			continue;
+
+		const char *name;
+		char *file;
+		if ( FcPatternGetString(fontset->fonts[i], FC_FAMILY, 0, (FcChar8**)&name) != FcResultMatch )
+			continue;
+		if ( FcPatternGetString(fontset->fonts[i], FC_FILE, 0, (FcChar8**)&file) != FcResultMatch )
+			continue;
+
+		font_name_entry entry;
+		entry.m_pchFile = (char *)malloc( Q_strlen(file) + 1 );
+		entry.m_pchFriendlyName = (char *)malloc( Q_strlen(name) + 1 );
+		Q_memcpy( entry.m_pchFile, file, Q_strlen(file) + 1 );
+		Q_memcpy( entry.m_pchFriendlyName, name, Q_strlen(name) + 1 );
+		m_FriendlyNameCache.Insert( entry );
+
+		// Map common Windows font names to Linux equivalents
+		if ( !V_stricmp( name, "DejaVu Sans" ) )
+		{
+			const char *aliases[] = { "Tahoma", "Verdana", "Trebuchet MS" };
+			for ( int j = 0; j < Q_ARRAYSIZE(aliases); j++ )
+			{
+				font_name_entry aliasEntry;
+				aliasEntry.m_pchFile = (char *)malloc( Q_strlen(file) + 1 );
+				aliasEntry.m_pchFriendlyName = (char *)malloc( Q_strlen(aliases[j]) + 1 );
+				Q_memcpy( aliasEntry.m_pchFile, file, Q_strlen(file) + 1 );
+				Q_memcpy( aliasEntry.m_pchFriendlyName, aliases[j], Q_strlen(aliases[j]) + 1 );
+				m_FriendlyNameCache.Insert( aliasEntry );
+			}
+		}
+		else if ( !V_stricmp( name, "Liberation Sans" ) )
+		{
+			const char *aliases[] = { "Arial", "Helvetica" };
+			for ( int j = 0; j < Q_ARRAYSIZE(aliases); j++ )
+			{
+				font_name_entry aliasEntry;
+				aliasEntry.m_pchFile = (char *)malloc( Q_strlen(file) + 1 );
+				aliasEntry.m_pchFriendlyName = (char *)malloc( Q_strlen(aliases[j]) + 1 );
+				Q_memcpy( aliasEntry.m_pchFile, file, Q_strlen(file) + 1 );
+				Q_memcpy( aliasEntry.m_pchFriendlyName, aliases[j], Q_strlen(aliases[j]) + 1 );
+				m_FriendlyNameCache.Insert( aliasEntry );
+			}
+		}
+		else if ( !V_stricmp( name, "DejaVu Sans Mono" ) || !V_stricmp( name, "Liberation Mono" ) )
+		{
+			const char *aliases[] = { "Courier New", "Lucida Console" };
+			for ( int j = 0; j < Q_ARRAYSIZE(aliases); j++ )
+			{
+				font_name_entry aliasEntry;
+				aliasEntry.m_pchFile = (char *)malloc( Q_strlen(file) + 1 );
+				aliasEntry.m_pchFriendlyName = (char *)malloc( Q_strlen(aliases[j]) + 1 );
+				Q_memcpy( aliasEntry.m_pchFile, file, Q_strlen(file) + 1 );
+				Q_memcpy( aliasEntry.m_pchFriendlyName, aliases[j], Q_strlen(aliases[j]) + 1 );
+				m_FriendlyNameCache.Insert( aliasEntry );
+			}
+		}
+	}
+
+	FcFontSetDestroy(fontset);
+	FcObjectSetDestroy(os);
+	FcPatternDestroy(pat);
+}
+
+static FcPattern* FontMatch(const char* type, ...)
+{
+	FcValue fcvalue;
+	va_list ap;
+	va_start(ap, type);
+
+	FcPattern* pattern = FcPatternCreate();
+
+	for (;;) {
+		fcvalue.type = static_cast<FcType>(va_arg(ap, int));
+		switch (fcvalue.type) {
+			case FcTypeString:
+				fcvalue.u.s = va_arg(ap, const FcChar8 *);
+				break;
+			case FcTypeInteger:
+				fcvalue.u.i = va_arg(ap, int);
+				break;
+			default:
+				Assert(!"FontMatch unhandled type");
+		}
+		FcPatternAdd(pattern, type, fcvalue, FcFalse);
+
+		type = va_arg(ap, const char *);
+		if (!type)
+			break;
+	}
+	va_end(ap);
+
+	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+	FcDefaultSubstitute(pattern);
+
+	FcResult result;
+	FcPattern* match = FcFontMatch(NULL, pattern, &result);
+	FcPatternDestroy(pattern);
+
+	return match;
+}
+
 bool CLinuxFont::CreateFromMemory(const char *windowsFontName, void *data, int size, int tall, int weight, int blur, int scanlines, int flags)
 {
 	// setup font properties
@@ -157,14 +287,38 @@ bool CLinuxFont::Create(const char *windowsFontName, int tall, int weight, int b
 	m_bRotary = flags & FONTFLAG_ROTARY;
 	m_bAdditive = flags & FONTFLAG_ADDITIVE;
 
-	// All fonts map to Liberation Sans on Linux
-	const char *fontPath;
-	if ( flags & FONTFLAG_ITALIC )
-		fontPath = "csgo/linux-fonts/LiberationSans-Italic.ttf";
-	else
-		fontPath = "csgo/linux-fonts/LiberationSans-Regular.ttf";
+	CreateFontList();
 
-	FT_Error error = FT_New_Face( FontManager().GetFontLibraryHandle(), fontPath, 0, &face );
+	// Map common Windows fonts to available Linux equivalents
+	const char *pchFontName = windowsFontName;
+	if ( !Q_stricmp( pchFontName, "Tahoma" ) || !Q_stricmp( pchFontName, "Verdana" ) )
+		pchFontName = "DejaVu Sans";
+
+	const int italic = (flags & FONTFLAG_ITALIC) ? FC_SLANT_ITALIC : FC_SLANT_ROMAN;
+	FcPattern* match = FontMatch(FC_FAMILY, FcTypeString, pchFontName,
+								 FC_WEIGHT, FcTypeInteger, FC_WEIGHT_NORMAL,
+								 FC_SLANT, FcTypeInteger, italic,
+								 NULL);
+
+	if ( !match )
+	{
+		AssertMsg1( false, "Unable to find font named %s\n", windowsFontName );
+		m_szName = "";
+		return false;
+	}
+
+	FcChar8* filename;
+	if ( FcPatternGetString(match, FC_FILE, 0, &filename) != FcResultMatch )
+	{
+		AssertMsg1( false, "Unable to find font named %s\n", windowsFontName );
+		m_szName = "";
+		FcPatternDestroy(match);
+		return false;
+	}
+
+	FT_Error error = FT_New_Face( FontManager().GetFontLibraryHandle(), (const char *)filename, 0, &face );
+
+	FcPatternDestroy(match);
 
 	if ( error == FT_Err_Unknown_File_Format )
 	{
@@ -195,8 +349,12 @@ bool CLinuxFont::Create(const char *windowsFontName, int tall, int weight, int b
 void CLinuxFont::InitMetrics()
 {
 	const MetricsTweaks_t metricTweaks = GetFontMetricsTweaks( m_szName );
-	
-	FT_Set_Pixel_Sizes( face, 0, m_iTall + metricTweaks.m_tallAdjust );
+
+	int requestedSize = m_iTall + metricTweaks.m_tallAdjust;
+	if ( requestedSize < 1 )
+		requestedSize = 1;
+
+	FT_Set_Pixel_Sizes( face, 0, requestedSize );
 
 	m_iAscent = FIXED6_2INT( face->size->metrics.ascender );
 	m_iMaxCharWidth = FIXED6_2INT( face->size->metrics.max_advance );
@@ -226,13 +384,13 @@ void CLinuxFont::InitMetrics()
 void CLinuxFont::GetCharRGBA(wchar_t ch, int rgbaWide, int rgbaTall, unsigned char *prgba )
 {
 	bool bShouldAntialias = m_bAntiAliased;
-	// filter out 
+	// filter out
 	if ( ch > 0x00FF && !(m_iFlags & FONTFLAG_CUSTOM) )
 	{
 		bShouldAntialias = false;
 	}
-	
-	FT_Error error = FT_Load_Char( face,ch, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL); 
+
+	FT_Error error = FT_Load_Char( face, ch, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL );
 	if ( error )
 		return;
 
@@ -287,7 +445,7 @@ void CLinuxFont::GetKernedCharWidth( wchar_t ch, wchar_t chBefore, wchar_t chAft
 
 	// look for it in the cache
 	kerned_abc_cache_t finder = { ch, chBefore, chAfter };
-	
+
 	unsigned short iKerned = m_ExtendedKernedABCWidthsCache.Find(finder);
 	if (m_ExtendedKernedABCWidthsCache.IsValidIndex(iKerned))
 	{
@@ -297,7 +455,7 @@ void CLinuxFont::GetKernedCharWidth( wchar_t ch, wchar_t chBefore, wchar_t chAft
 		return;
 	}
 
-    FT_UInt       glyph_index;
+	FT_UInt       glyph_index;
 	FT_Bool       use_kerning;
 	FT_UInt       previous;
 	int32_t       iFxpPenX;
