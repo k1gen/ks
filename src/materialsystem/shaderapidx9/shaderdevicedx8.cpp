@@ -1960,7 +1960,13 @@ void CShaderDeviceDx8::SetPresentParameters( void* hWnd, int nAdapter, const Sha
 	ZeroMemory( &m_PresentParameters, sizeof( m_PresentParameters ) );
 
 	m_PresentParameters.Windowed = info.m_bWindowed;
+#if defined( DX_TO_VK_ABSTRACTION )
+	// DXVK: Force COPY to preserve backbuffer content between frames.
+	// DISCARD with Vulkan swapchain rotation causes stale content (dirty rectangles bug).
+	m_PresentParameters.SwapEffect = D3DSWAPEFFECT_COPY;
+#else
 	m_PresentParameters.SwapEffect = info.m_bUsingMultipleWindows ? D3DSWAPEFFECT_COPY : D3DSWAPEFFECT_DISCARD;
+#endif
 
 	// for 360, we want to create it ourselves for hierarchical z support
 	m_PresentParameters.EnableAutoDepthStencil = IsX360() ? FALSE : TRUE; 
@@ -4049,7 +4055,22 @@ void CShaderDeviceDx8::Present()
 
 	if ( !IsDeactivated() )
 	{
-#ifndef DX_TO_GL_ABSTRACTION
+#if defined( DX_TO_VK_ABSTRACTION )
+		// DXVK: Clear backbuffer at frame start to prevent stale content from
+		// Vulkan swapchain rotation showing through (dirty rectangles bug).
+		// Similar to X360's EDRAM behavior where content doesn't persist after Present.
+		//
+		// TOGL avoided this by rendering to a separate texture (m_pDefaultColorSurface)
+		// that persisted between frames, then blitting it fully to the swapchain at Present.
+		// DXVK renders directly to the swapchain backbuffer, so we need this clear.
+		//
+		// Performance tradeoff: The clear itself is cheap (GPUs just set a flag), but this
+		// disables VGUI's dirty rectangle optimization - UI must redraw fully each frame
+		// instead of only changed parts. For gameplay this is negligible; complex menus
+		// may see minor impact. D3DSWAPEFFECT_COPY alone doesn't suffice because DXVK's
+		// Vulkan swapchain still rotates images underneath.
+		g_pShaderAPI->ClearBuffers( true, true, true, -1, -1 );
+#elif !defined( DX_TO_GL_ABSTRACTION )
 		if ( ( ShaderUtil()->GetConfig().bMeasureFillRate || ShaderUtil()->GetConfig().bVisualizeFillRate ) )
 		{
 			g_pShaderAPI->ClearBuffers( true, true, true, -1, -1 );
