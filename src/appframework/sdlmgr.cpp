@@ -1,6 +1,6 @@
 //====== Copyright  1996-2005, Valve Corporation, All rights reserved. =======//
 //
-// Purpose: An application framework  
+// Purpose: An application framework
 //
 //=============================================================================//
 
@@ -42,7 +42,7 @@ class LinuxAppFuncLogger
 		{
 			printf( ">%s\n", m_funcName );
 		};
-		
+
 		LinuxAppFuncLogger( const char *funcName, char *fmt, ... )
 		{
 			m_funcName = funcName;
@@ -52,12 +52,12 @@ class LinuxAppFuncLogger
 			vprintf( fmt, vargs );
 			va_end( vargs );
 		}
-		
+
 		~LinuxAppFuncLogger( )
 		{
 			printf( "<%s\n", m_funcName );
 		};
-	
+
 		const char *m_funcName;
 };
 #define	SDLAPP_FUNC			LinuxAppFuncLogger _logger_( __FUNCTION__ )
@@ -79,9 +79,9 @@ public:
 public:
 	virtual bool Connect( CreateInterfaceFn factory );
 	virtual void Disconnect();
-	
+
 	virtual void *QueryInterface( const char *pInterfaceName );
-	
+
 	// Init, shutdown
 	virtual InitReturnVal_t Init();
 	virtual void Shutdown();
@@ -94,7 +94,7 @@ public:
 	// Set the mouse cursor position.
 	virtual void SetCursorPosition( int x, int y );
 	virtual void GetCursorPosition( int *px, int *py );
-	
+
 	virtual void *GetWindowRef() { return (void *)m_Window; }
 
 	virtual void SetWindowFullScreen( bool bFullScreen, int nWidth, int nHeight, bool bDesktopFriendlyFullscreen );
@@ -102,10 +102,10 @@ public:
 	virtual void MoveWindow( int x, int y );
 	virtual void SizeWindow( int width, int tall );
 	virtual void PumpWindowsMessageLoop();
-		
+
 	virtual void DestroyGameWindow();
 	virtual void SetApplicationIcon( const char *pchAppIconFile );
-	
+
 	virtual void GetMouseDelta( int &x, int &y, bool bIgnoreNextMouseDelta = false );
 
 	virtual int GetActiveDisplayIndex();
@@ -121,7 +121,7 @@ public:
 
 	virtual void FreeCursor( const InputCursorHandle_t pchCursor );
 	virtual void SetCursorIcon( const InputCursorHandle_t pchCursor );
-	
+
 	// Post an event to the input event queue.
 	// if debugEvent is true, post it to the debug event queue.
 	void PostEvent( const CCocoaEvent &theEvent, bool debugEvent=false );
@@ -136,7 +136,7 @@ public:
 	virtual void OnFrameRendered();
 
 	virtual double GetPrevGLSwapWindowTime() { return m_flPrevGLSwapWindowTime; }
-	
+
 	// Returns all dependent libraries
 	virtual const AppSystemInfo_t* GetDependencies() {return NULL;}
 
@@ -146,7 +146,7 @@ public:
 	virtual void ForceSystemCursorVisible();
 	virtual void UnforceSystemCursorVisible();
 #endif
-	
+
 	// Returns the tier
 	virtual AppSystemTier_t GetTier()
 	{
@@ -160,7 +160,7 @@ public:
     bool CreateHiddenGameWindow( const char *pTitle, bool bWindowed, int width, int height );
 
 	virtual bool IsSingleton() { return false; }
-		
+
 private:
 	void handleKeyInput( const SDL_Event &event );
 
@@ -222,7 +222,7 @@ private:
 	Uint32 m_MouseButtonDownTimeStamp;
 	int m_MouseButtonDownX;
 	int m_MouseButtonDownY;
-			
+
 #if WITH_OVERLAY_CURSOR_VISIBILITY_WORKAROUND
 	int m_nForceCursorVisible;
 	int m_nForceCursorVisiblePrev;
@@ -350,6 +350,11 @@ InitReturnVal_t CSDLMgr::Init()
 	// Default to no XVidMode.
 	SDL_SetHint( "SDL_VIDEO_X11_XVIDMODE", "0" );
 
+	// Prefer Wayland over X11 - X11/XWayland has issues on modern Wayland desktops.
+	// This must be set before SDL_Init(). Falls back to X11 if Wayland unavailable.
+	SDL_SetHint( SDL_HINT_VIDEODRIVER, "wayland,x11" );
+	SDL_SetHint( SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1" );
+
 	if (!m_bTextMode && !SDL_WasInit(SDL_INIT_VIDEO))
 	{
 		if (SDL_Init(SDL_INIT_VIDEO) == -1)
@@ -412,7 +417,7 @@ InitReturnVal_t CSDLMgr::Init()
 	m_nForceCursorVisiblePrev = 0;
 	m_hSystemArrowCursor = SDL_CreateSystemCursor( SDL_SYSTEM_CURSOR_ARROW );
 #endif
-			
+
 	m_flPrevGLSwapWindowTime = 0.0f;
 
 	memset(m_pixelFormatAttribs, '\0', sizeof (m_pixelFormatAttribs));
@@ -421,11 +426,16 @@ InitReturnVal_t CSDLMgr::Init()
 
 	m_pixelFormatAttribCount = (attCursor - &m_pixelFormatAttribs[0]) / 2;
 
-	// we need a GL context before we dig down further, since we're calling
-	//  GL entry points, but the game hasn't made a window yet. So it's time
-	//  to make a window! We make a 640x480 one here, and later, when asked
-	//  to really actually make a window, we just resize the one we built here.
-    if ( !CreateHiddenGameWindow( "", true, 640, 480 ) )
+	// We need a Vulkan context before we dig down further, so create an initial
+	// window at desktop resolution to avoid issues on Wayland.
+	int initWidth = 1920, initHeight = 1080;
+	SDL_DisplayMode desktopMode;
+	if ( SDL_GetDesktopDisplayMode( 0, &desktopMode ) == 0 )
+	{
+		initWidth = desktopMode.w;
+		initHeight = desktopMode.h;
+	}
+	if ( !CreateHiddenGameWindow( "", true, initWidth, initHeight ) )
 		Error( "CreateGameWindow failed" );
 
 	if ( !m_bTextMode )
@@ -536,23 +546,13 @@ bool CSDLMgr::CreateHiddenGameWindow( const char *pTitle, bool bWindowed, int wi
 
 	m_bFullScreen = !bWindowed;
 
-	// Always make the fullscreen dimensions match the current
-	// state of the display. We'll render to a texture for whatever
-	// resolution the user _actually_ wants and stretchblt it to the
-	// real screen from there.
-	SDL_DisplayMode mode;
-	if (m_bFullScreen)
-	{
-		SDL_GetWindowDisplayMode(m_Window, &mode);
-	}
-
 	// no window yet? Create one now!
 	int displayindex = sdl_displayindex.GetInt();
 	displayindex = displayindex < 0 ? 0 : displayindex;
 	int x = SDL_WINDOWPOS_CENTERED_DISPLAY( displayindex );
 	int y = SDL_WINDOWPOS_CENTERED_DISPLAY( displayindex );
 	int flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_VULKAN;
-	m_Window = SDL_CreateWindow( pTitle, x, y, width, height,  flags );
+	m_Window = SDL_CreateWindow( pTitle, x, y, width, height, flags );
 
 	if (m_Window == NULL)
 		Error( "Failed to create SDL window: %s", SDL_GetError() );
@@ -563,8 +563,38 @@ bool CSDLMgr::CreateHiddenGameWindow( const char *pTitle, bool bWindowed, int wi
 
 	if (m_bFullScreen)
 	{
-		SDL_SetWindowDisplayMode(m_Window, &mode);
-		SDL_SetWindowFullscreen(m_Window, SDL_TRUE);
+		// On Wayland, mode switching isn't supported - use borderless fullscreen.
+		// The engine handles internal scaling via render-to-texture.
+		const char* videoDriver = SDL_GetCurrentVideoDriver();
+		bool isWayland = videoDriver && V_strcmp(videoDriver, "wayland") == 0;
+
+		if (!isWayland)
+		{
+			// X11: Get desktop mode and set it as fullscreen mode
+			SDL_DisplayMode mode;
+			SDL_GetDesktopDisplayMode(displayindex, &mode);
+			SDL_SetWindowDisplayMode(m_Window, &mode);
+			SDL_SetWindowFullscreen(m_Window, SDL_WINDOW_FULLSCREEN);
+		}
+		else
+		{
+			// Wayland: Use borderless fullscreen at native resolution
+			SDL_SetWindowFullscreen(m_Window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+		}
+
+		// After going fullscreen, query actual window size - it may differ from requested
+		// size (especially on Wayland where FULLSCREEN_DESKTOP uses native resolution)
+		int actualW, actualH;
+		SDL_GetWindowSize(m_Window, &actualW, &actualH);
+		if (actualW > 0 && actualH > 0)
+		{
+			width = actualW;
+			height = actualH;
+		}
+
+		// Mouse coordinates are 1:1 on Linux with FULLSCREEN_DESKTOP
+		m_flMouseXScale = 1.0f;
+		m_flMouseYScale = 1.0f;
 	}
 
 	m_WindowWidth = width;
@@ -608,10 +638,10 @@ bool CSDLMgr::IsDebugEvent( CCocoaEvent& event )
 	#if GLMDEBUG
 		// simple rule for now, if the option key is involved, it's a debug key
 		// but only if GLM debugging is builtin
-		
+
 		result |= ( (event.m_EventType == CocoaEvent_KeyDown) && ((event.m_ModifierKeyMask & (1<<eControlKey))!=0) );
 	#endif
-	
+
 	return result;
 }
 
@@ -629,6 +659,7 @@ void CSDLMgr::SetCursorPosition( int x, int y )
 	pRenderContext->GetViewport( rx, ry, width, height );
 	if ( width != windowWidth || height != windowHeight  )
 	{
+		// Scale from viewport coords to window coords
 		x = x * (float)windowWidth/width;
 		y = y * (float)windowHeight/height;
 	}
@@ -647,17 +678,15 @@ void CSDLMgr::GetCursorPosition( int *px, int *py )
 
 	int windowHeight = 0;
 	int windowWidth = 0;
-	//unsigned int ignored;
 	SDL_GetWindowSize((SDL_Window*)GetWindowRef(), &windowWidth, &windowHeight);
 
 	CMatRenderContextPtr pRenderContext( g_pMaterialSystem );
 	int rx, ry, width, height;
 	pRenderContext->GetViewport( rx, ry, width, height );
-	
+
 	if ( width != windowWidth || height != windowHeight  )
 	{
-		// scale the x/y back into the co-ords of the back buffer, not the scaled up window 
-		//DevMsg( "Mouse x:%d y:%d %d %d %d %d\n", x, y, width, windowWidth, height, abs( height - windowHeight ) );
+		// Scale from window coords to viewport coords so mouse matches VGUI
 		x = x * (float)width/windowWidth;
 		y = y * (float)height/windowHeight;
 	}
@@ -670,10 +699,10 @@ void CSDLMgr::PostEvent( const CCocoaEvent &theEvent, bool debugEvent )
 	SDLAPP_FUNC;
 
 	m_CocoaEventsMutex.Lock();
-	
+
 	CUtlLinkedList<CCocoaEvent,int> &queue = debugEvent ? m_CocoaEvents : m_DebugEvents;
 	queue.AddToTail( theEvent );
-	
+
 	m_CocoaEventsMutex.Unlock();
 }
 
@@ -724,7 +753,7 @@ void CSDLMgr::OnFrameRendered()
 	if ( m_nForceCursorVisible > 0 )
 	{
 		// Edge case: We were just asked to force the cursor visible, so do it now.
-		if ( m_nForceCursorVisiblePrev == 0 ) 
+		if ( m_nForceCursorVisiblePrev == 0 )
 		{
 			SDL_SetCursor( m_hSystemArrowCursor );
 			SDL_SetWindowGrab( m_Window, SDL_FALSE );
@@ -735,7 +764,7 @@ void CSDLMgr::OnFrameRendered()
 		// No further cursor processing.
 		m_nForceCursorVisiblePrev = m_nForceCursorVisible;
 		return;
-	} 
+	}
 	else if ( m_nForceCursorVisiblePrev > 0 )
 	{
 		Assert( m_nForceCursorVisible == 0 );
@@ -800,51 +829,26 @@ void CSDLMgr::SetWindowFullScreen( bool bFullScreen, int nWidth, int nHeight, bo
 {
 	SDLAPP_FUNC;
 
-	int displayIndex = GetActiveDisplayIndex();
-
-	Uint32 iFullscreenMode = bDesktopFriendlyFullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
-
-	if ( CommandLine()->FindParm( "-exclusivefs" ) )
-	{
-		iFullscreenMode = SDL_WINDOW_FULLSCREEN;
-	}
-	else if ( CommandLine()->FindParm( "-noexclusivefs" ) )
-	{
-		iFullscreenMode = SDL_WINDOW_FULLSCREEN_DESKTOP;
-	}
-
 	SDL_DisplayMode mode;
-	if ( SDL_GetDesktopDisplayMode( displayIndex, &mode ) != 0 )
-	{
-		Assert( 0 );
-		SDL_GetDesktopDisplayMode( 0, &mode );
-	}
+	int displayIndex = sdl_displayindex.GetInt();
 
 	if ( bFullScreen )
 	{
+		if ( SDL_GetDesktopDisplayMode( displayIndex, &mode ) != 0 )
+		{
+			Assert( 0 );
+			SDL_GetDesktopDisplayMode( 0, &mode );
+		}
 
 		mode.format = (Uint32)SDL_PIXELFORMAT_RGBX8888;
-
-#ifdef OSX
-		if ( iFullscreenMode == SDL_WINDOW_FULLSCREEN )
-		{
-			mode.w = nWidth;
-			mode.h = nHeight;
-		}
-#endif
-
-		m_flMouseXScale = ( float )nWidth / ( float )mode.w;
-		m_flMouseYScale = ( float )nHeight / ( float )mode.h;
 	}
 	else
 	{
-		mode.format = (Uint32)SDL_PIXELFORMAT_RGBX8888;
+		mode.format = ( Uint32 )SDL_PIXELFORMAT_RGBX8888;
 		mode.refresh_rate = 0;
 		mode.w = nWidth;
 		mode.h = nHeight;
 		mode.driverdata = 0;
-		m_flMouseXScale = 1.0f;
-		m_flMouseYScale = 1.0f;
 	}
 
 	SDL_SetWindowDisplayMode( m_Window, &mode );
@@ -881,9 +885,33 @@ void CSDLMgr::SetWindowFullScreen( bool bFullScreen, int nWidth, int nHeight, bo
 		}
 
 
-		SDL_SetWindowFullscreen( m_Window, bFullScreen ? iFullscreenMode : SDL_FALSE );
+		SDL_SetWindowFullscreen( m_Window, bFullScreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0 );
 
 		m_bFullScreen = bFullScreen;
+	}
+
+	if (bFullScreen)
+	{
+		int drawableW, drawableH;
+		SDL_GL_GetDrawableSize(m_Window, &drawableW, &drawableH);
+
+		if ( drawableW > 0 && drawableH > 0 )
+		{
+			// Use drawable size for accurate mouse scaling
+			m_flMouseXScale = (float)nWidth / (float)drawableW;
+			m_flMouseYScale = (float)nHeight / (float)drawableH;
+		}
+		else {
+			// Fallback to mode dimensions if drawable size unavailable
+			m_flMouseXScale = (float)nWidth / (float)mode.w;
+			m_flMouseYScale = (float)nHeight / (float)mode.h;
+		}
+	}
+	else
+	{
+		// Use 1:1 scaling for windowed mode
+		m_flMouseXScale = 1.0f;
+		m_flMouseYScale = 1.0f;
 	}
 }
 
@@ -899,10 +927,22 @@ void CSDLMgr::SizeWindow( int width, int tall )
 {
 	SDLAPP_FUNC;
 
-	m_WindowWidth = width;
-	m_WindowHeight = tall;
-
 	SDL_SetWindowSize(m_Window, width, tall);
+
+	// Query actual window size - in fullscreen modes (especially FULLSCREEN_DESKTOP),
+	// the compositor controls the window size and SDL_SetWindowSize may have no effect
+	int actualW, actualH;
+	SDL_GetWindowSize(m_Window, &actualW, &actualH);
+	if (actualW > 0 && actualH > 0)
+	{
+		m_WindowWidth = actualW;
+		m_WindowHeight = actualH;
+	}
+	else
+	{
+		m_WindowWidth = width;
+		m_WindowHeight = tall;
+	}
 }
 
 
@@ -1024,7 +1064,7 @@ void CSDLMgr::handleKeyInput( const SDL_Event &event )
 			case '.':
 				theEvent.m_UnicodeKeyUnmodified = '>';
 				break;
-		}		
+		}
 	}
 #endif
 
@@ -1066,13 +1106,29 @@ void CSDLMgr::PumpWindowsMessageLoop()
 
 				CCocoaEvent theEvent;
 				theEvent.m_EventType = CocoaEvent_MouseMove;
-				theEvent.m_MousePos[0] = event.motion.x * (m_bCursorVisible ? m_flMouseXScale : 1.0);
-				theEvent.m_MousePos[1] = event.motion.y * (m_bCursorVisible ? m_flMouseYScale : 1.0);
+				// Scale mouse coords from window space to render resolution
+				{
+					int mx = event.motion.x;
+					int my = event.motion.y;
+					if ( m_bCursorVisible )
+					{
+						int bw, bh;
+						g_pMaterialSystem->GetBackBufferDimensions( bw, bh );
+						if ( bw > 0 && bh > 0 && m_WindowWidth > 0 && m_WindowHeight > 0 &&
+							 (bw != m_WindowWidth || bh != m_WindowHeight) )
+						{
+							mx = mx * bw / m_WindowWidth;
+							my = my * bh / m_WindowHeight;
+						}
+					}
+					theEvent.m_MousePos[0] = mx;
+					theEvent.m_MousePos[1] = my;
+				}
 				theEvent.m_MouseButtonFlags = m_mouseButtons;
-                PostEvent( theEvent );
+				PostEvent( theEvent );
 				break;
 			}
-			
+
 			case SDL_MOUSEBUTTONUP:
 			case SDL_MOUSEBUTTONDOWN:
 			{
@@ -1125,7 +1181,7 @@ void CSDLMgr::PumpWindowsMessageLoop()
 
 				bool bDoublePress = false;
 
-				if (bPressed)  
+				if (bPressed)
 				{
 					if ( m_bGotMouseButtonDown &&
 						 ( (int)( event.button.timestamp - m_MouseButtonDownTimeStamp ) <= sdl_double_click_time.GetInt() ) &&
@@ -1146,8 +1202,25 @@ void CSDLMgr::PumpWindowsMessageLoop()
 
 				CCocoaEvent theEvent;
 				theEvent.m_EventType = (bPressed) ? CocoaEvent_MouseButtonDown : CocoaEvent_MouseButtonUp;
-				theEvent.m_MousePos[0] = event.button.x * (m_bCursorVisible ? m_flMouseXScale : 1.0);
-				theEvent.m_MousePos[1] = event.button.y * (m_bCursorVisible ? m_flMouseYScale : 1.0);
+				// Scale mouse coords from window space to viewport space to match VGUI
+				{
+					int mx = event.button.x;
+					int my = event.button.y;
+					if ( m_bCursorVisible )
+					{
+						CMatRenderContextPtr pRenderContext( g_pMaterialSystem );
+						int rx, ry, vw, vh;
+						pRenderContext->GetViewport( rx, ry, vw, vh );
+						if ( vw > 0 && vh > 0 && m_WindowWidth > 0 && m_WindowHeight > 0 &&
+							 (vw != m_WindowWidth || vh != m_WindowHeight) )
+						{
+							mx = mx * vw / m_WindowWidth;
+							my = my * vh / m_WindowHeight;
+						}
+					}
+					theEvent.m_MousePos[0] = mx;
+					theEvent.m_MousePos[1] = my;
+				}
 				theEvent.m_MouseButtonFlags = m_mouseButtons;
 				theEvent.m_nMouseClickCount = bDoublePress ? 2 : 1;
 				theEvent.m_MouseButton = cocoaButton;
@@ -1223,6 +1296,41 @@ void CSDLMgr::PumpWindowsMessageLoop()
 						SDL_SetModState( KMOD_NONE );
 						break;
 					}
+#ifdef LINUX
+					case SDL_WINDOWEVENT_SIZE_CHANGED:
+					{
+						// Window size changed - this happens when moving to a different
+						// display in fullscreen desktop mode.
+						int newWidth = event.window.data1;
+						int newHeight = event.window.data2;
+
+						// Update our tracked window size
+						if ( newWidth > 0 && newHeight > 0 )
+						{
+							// Only post event if size actually changed
+							if ( newWidth != m_WindowWidth || newHeight != m_WindowHeight )
+							{
+								m_WindowWidth = newWidth;
+								m_WindowHeight = newHeight;
+
+								// Update the display index convar in case we moved to a different monitor
+								int newDisplayIndex = SDL_GetWindowDisplayIndex( m_Window );
+								if ( newDisplayIndex >= 0 )
+								{
+									sdl_displayindex.SetValue( newDisplayIndex );
+								}
+
+								// Post event to notify engine of size change
+								CCocoaEvent theEvent;
+								theEvent.m_EventType = CocoaEvent_WindowSizeChanged;
+								theEvent.m_MousePos[0] = newWidth;
+								theEvent.m_MousePos[1] = newHeight;
+								PostEvent( theEvent );
+							}
+						}
+						break;
+					}
+#endif
 				}
 				break;
 
@@ -1362,26 +1470,15 @@ int CSDLMgr::GetActiveDisplayIndex()
 void CSDLMgr::GetNativeDisplayInfo( int nDisplay, uint &nWidth, uint &nHeight, uint &nRefreshHz )
 {
 	SDL_DisplayMode mode;
+	memset( &mode, 0, sizeof(mode) );
 
 	if ( nDisplay == -1 )
 	{
-		if ( g_bSDLDisplayindexSet )
-		{
-			nDisplay = sdl_displayindex.GetInt();
-		}
-		else
-		{
-			// sdl_displayindex hasn't been parsed yet. This can happen in CMaterialSystem::ModInit()
-			//	before the config files have been read, etc. So in this case, just grab the largest
-			//	display we can find and return with that.
-			int Width, Height;
-			nDisplay = GetLargestDisplaySize( Width, Height );
-		}
+		nDisplay = g_bSDLDisplayindexSet ? sdl_displayindex.GetInt() : 0;
 	}
 
 	if ( SDL_GetDesktopDisplayMode( nDisplay, &mode ) != 0 )
 	{
-		Assert( 0 );
 		SDL_GetDesktopDisplayMode( 0, &mode );
 	}
 
@@ -1407,7 +1504,7 @@ void CSDLMgr::RenderedSize( uint &width, uint &height, bool set )
 	}
 }
 
-void CSDLMgr::DisplayedSize( uint &width, uint &height ) 
+void CSDLMgr::DisplayedSize( uint &width, uint &height )
 {
 	SDLAPP_FUNC;
 
@@ -1465,7 +1562,7 @@ InputCursorHandle_t CSDLMgr::LoadCursorFromFile( const char *pchFileName )
 	V_FileBase( path, pchCursorName, sizeof( pchCursorName ) );
 
 	int nHotX = 0, nHotY = 0;
-	
+
 	KeyValues *pRes = pCursorResource->FindKey( pchCursorName );
 	if ( pRes != NULL )
 	{
@@ -1501,7 +1598,7 @@ void CSDLMgr::SetGammaRamp( const uint16 *pRed, const uint16 *pGreen, const uint
 	if ( m_Window )
 	{
 		int nResult = SDL_SetWindowGammaRamp( m_Window, pRed, pGreen, pBlue );
-		
+
 		if ( nResult != 0 )
 		{
 			ConMsg( "SDL_SetWindowGammaRamp failed: %d\n", nResult );
@@ -1528,4 +1625,3 @@ void CSDLMgr::UnforceSystemCursorVisible()
 
 
 #endif  // !DEDICATED
-

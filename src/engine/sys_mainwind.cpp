@@ -175,6 +175,7 @@ public:
 	void	HandleMsg_WindowMove( const InputEvent_t &event );
 	void	HandleMsg_ActivateApp( const InputEvent_t &event );
 	void	HandleMsg_Close( const InputEvent_t &event );
+	void	HandleMsg_WindowSizeChanged( const InputEvent_t &event );
 
 	// Call the appropriate HandleMsg_ function.
 	void	DispatchInputEvent( const InputEvent_t &event );
@@ -307,6 +308,7 @@ GameMessageHandler_t g_GameMessageHandlers[] =
 	{ IE_WindowMove,			&CGame::HandleMsg_WindowMove },
 	{ IE_Close,					&CGame::HandleMsg_Close },
 	{ IE_Quit,					&CGame::HandleMsg_Close },
+	{ IE_WindowSizeChanged,		&CGame::HandleMsg_WindowSizeChanged },
 };
 
 
@@ -392,6 +394,20 @@ void CGame::HandleMsg_Close( const InputEvent_t &event )
 	{
 		eng->SetQuitting( IEngine::QUIT_TODESKTOP );
 	}
+}
+
+void CGame::HandleMsg_WindowSizeChanged( const InputEvent_t &event )
+{
+#ifndef DEDICATED
+	// Window size changed - this happens on Wayland when moving between displays
+	int nNewWidth = event.m_nData;
+	int nNewHeight = event.m_nData2;
+
+	if ( nNewWidth > 0 && nNewHeight > 0 && videomode )
+	{
+		videomode->OnWindowSizeChanged( nNewWidth, nNewHeight );
+	}
+#endif
 }
 
 void CGame::DispatchInputEvent( const InputEvent_t &event )
@@ -2551,21 +2567,23 @@ void CGame::GetDesktopInfo( int &width, int &height, int &refreshrate )
 {
 #if defined(USE_SDL)
 
-	width = 640;
-	height = 480;
+	width = 1920;
+	height = 1080;
 	refreshrate = 0;
 
-	// Go through all the displays and return the size of the largest.
+	// Go through all displays and return the size of the largest.
+	// Use SDL_GetDesktopDisplayMode for more reliable resolution info (especially on Wayland).
 	for( int i = 0; i < SDL_GetNumVideoDisplays(); i++ )
 	{
-		SDL_Rect rect;
+		SDL_DisplayMode mode;
 
-		if ( !SDL_GetDisplayBounds( i, &rect ) )
+		if ( SDL_GetDesktopDisplayMode( i, &mode ) == 0 )
 		{
-			if ( ( rect.w > width ) || ( ( rect.w == width ) && ( rect.h > height ) ) )
+			if ( ( mode.w > width ) || ( ( mode.w == width ) && ( mode.h > height ) ) )
 			{
-				width = rect.w;
-				height = rect.h;
+				width = mode.w;
+				height = mode.h;
+				refreshrate = mode.refresh_rate;
 			}
 		}
 	}

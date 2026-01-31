@@ -1034,6 +1034,20 @@ void CInputSystem::PollInputState_Windows()
 
 				}
 				break;
+
+				case CocoaEvent_WindowSizeChanged:
+				{
+					// Window size changed (e.g., moved between displays on Wayland).
+					// m_MousePos[0] = new width, m_MousePos[1] = new height
+					InputEvent_t event;
+					memset( &event, 0, sizeof(event) );
+					event.m_nType = IE_WindowSizeChanged;
+					event.m_nData = pEvent->m_MousePos[0];
+					event.m_nData2 = pEvent->m_MousePos[1];
+					event.m_nData3 = 0; // Not minimized
+					g_pInputSystem->PostUserEvent( event );
+				}
+				break;
 			}
 		}
 	}

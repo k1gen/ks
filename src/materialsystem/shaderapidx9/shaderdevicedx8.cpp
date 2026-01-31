@@ -74,6 +74,10 @@ static double s_rdtsc_to_ms;
 #include <ps3gcm/gcmstate.h>
 #endif
 
+#if defined( LINUX )
+#include "appframework/ilaunchermgr.h"
+#endif
+
 // NOTE: This has to be the last file included!
 #include "tier0/memdbgon.h"
 
@@ -1556,6 +1560,33 @@ void CShaderDeviceMgrDx8::GetCurrentModeInfo( ShaderDisplayMode_t* pInfo, int nA
 		hr = m_pD3DDevice->GetDisplayMode( 0, &mode );
 		Assert( !FAILED(hr) );
 	}
+#elif defined( LINUX ) && defined( USE_SDL )
+	// On Linux, query SDL for actual window size rather than relying on D3D adapter.
+	// With DXVK and Wayland's FULLSCREEN_DESKTOP, the D3D adapter mode may not match
+	// the actual window/display resolution.
+	if ( g_pLauncherMgr )
+	{
+		uint nWidth, nHeight;
+		g_pLauncherMgr->DisplayedSize( nWidth, nHeight );
+		if ( nWidth > 0 && nHeight > 0 )
+		{
+			mode.Width = nWidth;
+			mode.Height = nHeight;
+			mode.RefreshRate = 60;
+			mode.Format = D3DFMT_X8R8G8B8;
+		}
+		else
+		{
+			// Fallback to D3D query
+			hr = D3D()->GetAdapterDisplayMode( nAdapter, &mode );
+			Assert( !FAILED(hr) );
+		}
+	}
+	else
+	{
+		hr = D3D()->GetAdapterDisplayMode( nAdapter, &mode );
+		Assert( !FAILED(hr) );
+	}
 #else
 	hr = D3D()->GetAdapterDisplayMode( nAdapter, &mode );
 	Assert( !FAILED(hr) );	
@@ -1979,6 +2010,9 @@ void CShaderDeviceDx8::SetPresentParameters( void* hWnd, int nAdapter, const Sha
 
 	if ( IsX360() || !info.m_bWindowed ) // if fullscreen
 	{
+		// Use requested resolution if valid, otherwise fall back to native display mode.
+		// On Linux/Wayland, runtime mode changes (from display switching) need to use
+		// the requested size, while initial setup uses native resolution (info has 0s).
 		bool useDefault = ( info.m_DisplayMode.m_nWidth == 0 ) || ( info.m_DisplayMode.m_nHeight == 0 );
 		m_PresentParameters.BackBufferWidth = useDefault ? mode.m_nWidth : info.m_DisplayMode.m_nWidth;
 		m_PresentParameters.BackBufferHeight = useDefault ? mode.m_nHeight : info.m_DisplayMode.m_nHeight;
@@ -3120,7 +3154,13 @@ void CShaderDeviceDx8::CheckDeviceLost( bool bOtherAppInitializing )
 	}
 
 	// Do mode change if we have a video mode change.
+#ifdef LINUX
+	// On Linux, always allow mode change regardless of deactivation state.
+	// IsDeactivated() can return incorrect values on Wayland when moving between displays.
+	if ( m_bPendingVideoModeChange )
+#else
 	if ( m_bPendingVideoModeChange && !IsDeactivated() )
+#endif
 	{
 #ifdef _DEBUG
 		Warning( "mode change!\n" );

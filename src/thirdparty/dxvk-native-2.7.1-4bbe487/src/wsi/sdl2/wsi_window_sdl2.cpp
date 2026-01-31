@@ -10,6 +10,7 @@
 
 #include <windows.h>
 #include <SDL_vulkan.h>
+#include <cstring>
 
 namespace dxvk::wsi {
 
@@ -66,6 +67,14 @@ namespace dxvk::wsi {
     if (!isDisplayValid(displayId))
       return false;
 
+    // On Wayland, mode switching is not supported - the compositor controls display modes.
+    // Since we use FULLSCREEN_DESKTOP on Wayland (see enterFullscreenMode), the engine
+    // handles internal scaling. Just return success without trying to set a display mode.
+    const char* videoDriver = SDL_GetCurrentVideoDriver();
+    if (videoDriver && std::strcmp(videoDriver, "wayland") == 0) {
+      return true;
+    }
+
     SDL_DisplayMode wantedMode = { };
     wantedMode.w            = pMode.width;
     wantedMode.h            = pMode.height;
@@ -101,7 +110,13 @@ namespace dxvk::wsi {
     if (!isDisplayValid(displayId))
       return false;
 
-    uint32_t flags = ModeSwitch
+    // On Wayland, mode switching is not supported - the compositor controls display modes.
+    // Always use FULLSCREEN_DESKTOP (borderless fullscreen at native resolution) on Wayland.
+    // The engine will handle internal scaling to the requested resolution.
+    const char* videoDriver = SDL_GetCurrentVideoDriver();
+    bool isWayland = videoDriver && std::strcmp(videoDriver, "wayland") == 0;
+
+    uint32_t flags = (ModeSwitch && !isWayland)
         ? SDL_WINDOW_FULLSCREEN
         : SDL_WINDOW_FULLSCREEN_DESKTOP;
     

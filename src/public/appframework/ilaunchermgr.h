@@ -121,6 +121,7 @@ enum CocoaEventType_t
 	CocoaEvent_MouseScroll,
 	CocoaEvent_AppQuit,
 	CocoaEvent_Deleted, // Event was one of the above, but has been handled and should be ignored now.
+	CocoaEvent_WindowSizeChanged, // Window size changed (e.g., moved between displays on Wayland). m_MousePos[0]=width, m_MousePos[1]=height
 };
 
 // enum values need to match bit-shifting logic in CInputSystem::UpdateMouseButtonState and 

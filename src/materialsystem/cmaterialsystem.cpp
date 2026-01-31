@@ -2030,18 +2030,22 @@ void CMaterialSystem::GenerateConfigFromConfigKeyValues( MaterialSystem_Config_t
 
 #ifdef LINUX
 
+	// On Linux, ALWAYS use the native desktop resolution.
+	// Ignore moddefaults.txt which has outdated GPU-based resolution defaults.
 	uint width = 0;
 	uint height = 0;
-	uint refreshHz = 0; // Not used
+	uint refreshHz = 0;
 
-	// query backbuffer size (window size whether FS or windowed)
 	if( g_pLauncherMgr )
 	{
 		g_pLauncherMgr->GetNativeDisplayInfo( -1, width, height, refreshHz );
 	}
 
-	pConfig->m_VideoMode.m_Width = width;
-	pConfig->m_VideoMode.m_Height = height;
+	if ( width > 0 && height > 0 )
+	{
+		pConfig->m_VideoMode.m_Width = width;
+		pConfig->m_VideoMode.m_Height = height;
+	}
 
 #elif defined( _X360 )
 	pConfig->m_VideoMode.m_Width = GetSystemMetrics( SM_CXSCREEN );

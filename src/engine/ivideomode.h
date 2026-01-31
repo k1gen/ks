@@ -81,6 +81,15 @@ public:
 	// Takes snapshots
 	virtual void			TakeSnapshotJPEG( const char *pFileName, int quality ) = 0;
 	virtual bool			TakeSnapshotJPEGToBuffer( CUtlBuffer& buf, int quality ) = 0;
+
+	// Synchronizes cached mode width/height to actual SDL window size.
+	// Call this after window creation, display changes, or when resolution may have changed.
+	// Returns true if the values changed.
+	virtual bool			SyncToActualWindowSize() = 0;
+
+	// Called when the window size changes (e.g., when moving between displays on Wayland).
+	// Syncs all systems atomically and notifies panels.
+	virtual void			OnWindowSizeChanged( int nNewWidth, int nNewHeight ) = 0;
 };
 
 

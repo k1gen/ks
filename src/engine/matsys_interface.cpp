@@ -262,7 +262,18 @@ static void ReadMaterialSystemConfigFromRegistry( MaterialSystem_Config_t &confi
 	// Does gamma need to have config set here too!
 
 	// Get the window sizes and (whether or not we are windowed).
-	KeyValues *pFindKey = pConfigKeys->FindKey( "setting.defaultres" );
+	KeyValues *pFindKey;
+#ifdef LINUX
+	// On Linux, always use native desktop resolution instead of outdated config file defaults
+	int desktopWidth, desktopHeight, desktopRefresh;
+	game->GetDesktopInfo( desktopWidth, desktopHeight, desktopRefresh );
+	if ( desktopWidth > 0 && desktopHeight > 0 )
+	{
+		config.m_VideoMode.m_Width = desktopWidth;
+		config.m_VideoMode.m_Height = desktopHeight;
+	}
+#else
+	pFindKey = pConfigKeys->FindKey( "setting.defaultres" );
 	if ( pFindKey )
 	{
 		config.m_VideoMode.m_Width = pFindKey->GetInt();
@@ -273,6 +284,7 @@ static void ReadMaterialSystemConfigFromRegistry( MaterialSystem_Config_t &confi
 	{
 		config.m_VideoMode.m_Height = pFindKey->GetInt();
 	}
+#endif
 
 	pFindKey = pConfigKeys->FindKey( "setting.fullscreen" );
 	if ( pFindKey )

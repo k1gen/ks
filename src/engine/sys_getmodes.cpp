@@ -115,6 +115,8 @@ public:
 	virtual bool		CreateGameWindow( int nWidth, int nHeight, bool bWindowed, bool bNoWindowBorder );
 	virtual int			GetModeWidth( void ) const;
 	virtual int			GetModeHeight( void ) const;
+	virtual bool		SyncToActualWindowSize();
+	virtual void		OnWindowSizeChanged( int nNewWidth, int nNewHeight );
 	virtual const vrect_t &GetClientViewRect( ) const;
 	virtual void		SetClientViewRect( const vrect_t &viewRect );
 	virtual void		MarkClientViewRectDirty();
@@ -237,17 +239,24 @@ CVideoMode_Common::CVideoMode_Common( void )
     m_nNumModes    = 0;
     m_bInitialized = false;
 
-	if ( IsOSX() )
-	{
-		DefaultVideoMode().width  = 1024;
-		DefaultVideoMode().height = 768;
-	}
-	else 
-	{
-		DefaultVideoMode().width  = 640;
-		DefaultVideoMode().height = 480;
-	}
+    // Query SDL for desktop resolution if available, otherwise use sensible defaults
+    int desktopWidth = 1920;
+    int desktopHeight = 1080;
 
+#if defined( USE_SDL )
+    if ( SDL_WasInit( SDL_INIT_VIDEO ) )
+    {
+        SDL_DisplayMode mode;
+        if ( SDL_GetDesktopDisplayMode( 0, &mode ) == 0 )
+        {
+            desktopWidth = mode.w;
+            desktopHeight = mode.h;
+        }
+    }
+#endif
+
+    DefaultVideoMode().width  = desktopWidth;
+    DefaultVideoMode().height = desktopHeight;
     DefaultVideoMode().bpp    = 32;
     DefaultVideoMode().refreshRate = 0;
 
@@ -261,8 +270,8 @@ CVideoMode_Common::CVideoMode_Common( void )
     m_pLoadingTexture      = NULL;
 	m_pTitleTexture        = NULL;
     m_bWindowed            = false;
-    m_nModeWidth           = IsPC() ? 1024 : 640;
-    m_nModeHeight          = IsPC() ? 768 : 480;
+    m_nModeWidth           = desktopWidth;
+    m_nModeHeight          = desktopHeight;
 }
 
 //-----------------------------------------------------------------------------
@@ -307,6 +316,8 @@ bool CVideoMode_Common::NoWindowBorder() const
 
 //-----------------------------------------------------------------------------
 // Returns the video mode width + height.
+// These return the cached internal values to maintain consistency with
+// panel sizing and OnScreenSizeChanged comparisons.
 //-----------------------------------------------------------------------------
 int CVideoMode_Common::GetModeWidth( void ) const
 {
@@ -316,6 +327,65 @@ int CVideoMode_Common::GetModeWidth( void ) const
 int CVideoMode_Common::GetModeHeight( void ) const
 {
     return m_nModeHeight;
+}
+
+
+//-----------------------------------------------------------------------------
+// Synchronizes the cached mode width/height to actual SDL window size.
+// This is critical on Wayland where FULLSCREEN_DESKTOP uses native resolution
+// and the window can move between displays with different resolutions.
+// Returns true if values changed.
+//-----------------------------------------------------------------------------
+bool CVideoMode_Common::SyncToActualWindowSize()
+{
+#if defined( USE_SDL )
+    if ( !g_pLauncherMgr )
+        return false;
+
+    uint nWidth, nHeight;
+    g_pLauncherMgr->DisplayedSize( nWidth, nHeight );
+
+    if ( nWidth <= 0 || nHeight <= 0 )
+        return false;
+
+    int newWidth = (int)nWidth;
+    int newHeight = (int)nHeight;
+
+    // Check if values actually changed
+    if ( m_nModeWidth == newWidth && m_nModeHeight == newHeight )
+        return false;
+
+    // Update cached values atomically
+    m_nModeWidth = newWidth;
+    m_nModeHeight = newHeight;
+
+    // Also update the default video mode to match
+    DefaultVideoMode().width = newWidth;
+    DefaultVideoMode().height = newHeight;
+
+    return true;
+#else
+    return false;
+#endif
+}
+
+
+//-----------------------------------------------------------------------------
+// Called when the window size changes at runtime (e.g., moving between displays).
+// Triggers a full mode change to resize backbuffer and update all systems.
+//-----------------------------------------------------------------------------
+void CVideoMode_Common::OnWindowSizeChanged( int nNewWidth, int nNewHeight )
+{
+    if ( nNewWidth <= 0 || nNewHeight <= 0 )
+        return;
+
+    // Skip if no actual change
+    if ( m_nModeWidth == nNewWidth && m_nModeHeight == nNewHeight )
+        return;
+
+    // Trigger a full mode change to resize the backbuffer and update all systems.
+    // This will call AdjustForModeChange which handles VGUI notifications etc.
+    SetMode( nNewWidth, nNewHeight, IsWindowedMode(), NoWindowBorder() );
 }
 
 
@@ -547,6 +617,10 @@ bool CVideoMode_Common::CreateGameWindow( int nWidth, int nHeight, bool bWindowe
 
 		if( IsPS3QuitRequested() )
 			return false;
+
+		// Sync cached values to actual window size BEFORE using them.
+		// On Wayland/FULLSCREEN_DESKTOP, the actual window size may differ from requested.
+		SyncToActualWindowSize();
 
         // Re-size and re-center the window
 		AdjustWindow( GetModeWidth(), GetModeHeight(), GetModeBPP(), IsWindowedMode(), NoWindowBorder() );
@@ -2417,6 +2491,15 @@ bool CVideoMode_MaterialSystem::SetMode( int nWidth, int nHeight, bool bWindowed
 		videoMode.width = nWidth;
 		videoMode.height = nHeight;
 	}
+#if defined( LINUX )
+	// On Linux with FULLSCREEN_DESKTOP, the compositor controls the resolution.
+	// Always use the exact requested size to match the actual window dimensions.
+	else if ( !bWindowed && ( videoMode.width != nWidth || videoMode.height != nHeight ) )
+	{
+		videoMode.width = nWidth;
+		videoMode.height = nHeight;
+	}
+#endif
 
     // update current video state
     MaterialSystem_Config_t config = *g_pMaterialSystemConfig;
@@ -2499,10 +2582,18 @@ void CVideoMode_MaterialSystem::AdjustForModeChange( void )
 
 	ResetCurrentModeForNewResolution( nNewWidth, nNewHeight, bWindowed, bNoWindowBorder );
 	AdjustWindow( GetModeWidth(), GetModeHeight(), GetModeBPP(), IsWindowedMode(), NoWindowBorder() );
+
+#if defined( USE_SDL )
+	// On Linux/Wayland, the actual window size may differ from what we requested
+	// (e.g., FULLSCREEN_DESKTOP uses native resolution regardless of config).
+	// Sync to the actual window size AFTER AdjustWindow so we know the true dimensions.
+	SyncToActualWindowSize();
+#endif
+
     MarkClientViewRectDirty();
     pRenderContext->Viewport( 0, 0, GetModeWidth(), GetModeHeight() );
 
-    // fixup vgui
+    // fixup vgui - pass old values so panels that match old size will resize
     vgui::surface()->OnScreenSizeChanged( nOldWidth, nOldHeight );
 	
 	game->OnScreenSizeChanged( nOldWidth, nOldHeight );
